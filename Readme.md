@@ -600,17 +600,6 @@ public static function setUpBeforeClass(): void
 }
 ```
 
-## Excepciones
-
-Nuestro código puede -debe- devolver excepciones cuando algo falle. Dado que cuando una excepción es devuelta la ejecución del código se para, PHPUnit nos provee un método para probar las excepciones. Este método debe escribirse justo antes de la línea que puede devolver la excepción:
-
-```php
-$this->expectException(QueueException::class);
-static::$queue->push('Add this item should throw an QueueException Exception');
-```
-
-Además de las excepciones, podemos probar código y mensaje de la excepción con `expectExceptionCode()` y `expectExceptionMessage()`.
-
 ## Autocarga de clases
 
 Cada vez que escribimos un test debemos, al menos en el primer método de la clase test, requerir la clase que vamos a probar. Podemos evitar esto si utilizamos autocarga de clases. La mejor forma de autocargar clases es usar autoload PSR-4 de Composer que, básicamente, mapea *namespaces* con carpetas.
@@ -645,6 +634,166 @@ Podemos configurar esto para que PHPUnit lo haga directamente añadiéndolo en e
 
 ```bash
 $ phpunit --bootstrap="vendor/autoload.php"
+```
+
+## Data Providers
+
+En ocasiones creamos tests que son repetitivos, en los que cambia únicamente los datos con los que comparamos. En lugar de escribir una función test por cada aserción que queremos comparar, podemos usar un Data Provider, que no es más que una colección de arrays en los que cada array está formado por cada uno de los parámetros que queramos incluir en la función test:
+
+```php
+public function titleProvider()
+{
+    return [
+        ["An example article", "An_example_article"],
+        ["An    example    \n    article", "An_example_article"],
+        [" An example article ", "An_example_article"],
+        ["Read! This! Now!", "Read_This_Now"],
+    ];
+}
+```
+
+En la función test indicamos con una anotación qué Data Provider utilizará y le pasamos el número de parámetros que corresponden:
+
+```php
+/**
+* @dataProvider titleProvider
+*/
+public function testSlug($title, $slug)
+{
+    $this->article->title = $title;
+    $this->assertEquals($this->article->getSlug(), $slug);
+}
+```
+
+Este método será invocado tantas veces como colecciones existan en el array, en este caso cuatro, por lo que PHPUnit nos dirá que se han ejecutado cuatro aserciones.
+
+En caso de que algún test falle, PHPUnit nos indicará el error y hará referencia al índice dentro del Data Provider que ha provocado el error:
+
+```
+1) ArticleTest::testSlug with data set #2 (' An example article ', 'An_example_article ')
+Failed asserting that two strings are equal.
+--- Expected
++++ Actual
+@@ @@
+-'An_example_article'
++'An_example_article '
+```
+
+Esto puede ser un problema ya que podemos tener sets de datos muy grandes. Para evitar esto, podemos añadir el formato clave => set de datos dentro del Data Provider, y PHPUnit hará referencia al set que ha provocado el error con su clave, siendo mucho más claro y sintáctico. El Data Provider quedaría así:
+
+```php
+public function titleProvider()
+    {
+        return [
+            'Slug Has Spaces Replaced By Underscores'
+            => ["An example article", "An_example_article"],
+            'Slug Has Whitespace Replaced By Single Underscore'
+            => ["An    example    \n    article", "An_example_article"],
+            'Slug Does Not Start Or End With An Underscore'
+            => [" An example article ", "An_example_article"],
+            'Slug Does Not Have Any Non Word Characters'
+            => ["Read! This! Now!", "Read_This_Now"]
+        ];
+    }
+```
+
+Y, en caso de error, PHPUnit hará referencia a la clave en lugar del índice:
+
+```
+1) ArticleTest::testSlug with data set "Slug Does Not Start Or End With An Underscore" (' An example article ', 'An_example_article ')
+Failed asserting that two strings are equal.
+--- Expected
++++ Actual
+@@ @@
+-'An_example_article'
++'An_example_article '
+```
+
+## Excepciones
+
+Nuestro código puede -debe- devolver excepciones cuando algo falle. Dado que cuando una excepción es devuelta la ejecución del código se para, PHPUnit nos provee un método para probar las excepciones. Este método debe escribirse justo antes de la línea que puede devolver la excepción:
+
+```php
+$this->expectException(QueueException::class);
+static::$queue->push('Add this item should throw an QueueException Exception');
+```
+
+Además de las excepciones, podemos probar código y mensaje de la excepción con `expectExceptionCode()` y `expectExceptionMessage()`.
+
+## Probando métodos protegidos o privados
+
+En ocasiones nos encontramos con métodos protegidos o privados que, si ejecutamos un test sobre ellos, obtendremos un error ya que no podemos acceder a ellos. Hay programadores que opinan que este tipo de métodos no deben ser probados ya que forman parte del funcionamiento interno de una clase y sólo pueden ser utilizados por otros métodos de la misma, de forma que sólo deberíamos probar los métodos públicos, que son los que forman el API pública de la clase.
+
+Pero dado que existe herencia de clases, a no ser que nuestra clase sea declarada como *final*, los métodos protegidos deben ser también sometidos a test ya que su correcto funcionamiento puede determinar el correcto funcionamiento de otras clases. Hay dos formas de realizar estas pruebas:
+
+### Crear una clase hija
+
+Se trata de crear una clase hija que herede de la clase que tiene los métodos que queremos probar:
+
+```php
+<?php
+
+class ItemChild extends Item
+{
+    public function getID()
+    {
+        return parent::getID();
+    }
+}
+```
+
+Obviamente con este método no podemos probar los métodos privados.
+
+### Reflection
+
+PHP tiene un API Reflection que nos permite hacer ingeniería inversa de las clases. Esto nos permite probar métodos privados cambiando su visibilidad al vuelo. Supongamos que tenemos un método getToken que es privado y queremos probarlo:
+
+```php
+public function testTokenIsAString()
+{
+    $item = new ItemChild;
+
+    $reflector = new ReflectionClass(Item::class);
+    $method = $reflector->getMethod('getToken');
+    $method->setAccessible(true);
+    $result = $method->invoke($item);
+
+    $this->assertIsString($result);
+}
+```
+
+Al usar reflection, nuestro test funcionará correctamente. Si nuestro método privado recibe argumentos, cambiamos el método invoke por invokeArgs que recibe la clase padre y, como segundo parámetro, un array de argumentos:
+
+```php
+public function testPrefixedTokenStartsWithPrefix()
+    {
+        $item = new Item;
+
+        $reflector = new ReflectionClass(Item::class);
+        $method = $reflector->getMethod('getPrefixedToken');
+        $method->setAccessible(true);
+        $result = $method->invokeArgs($item, ['example']);
+
+        $this->assertStringStartsWith('example', $result);
+    }
+```
+
+Que podamos probar métodos privados no quiere decir que deban ser probados. Si bien los métodos protegidos sí deben ser probados ya que pueden ser heredados y utilizados, los métodos privados son de uso interno de la clase y su prueba debe ser indirecta, a través de los métodos públicos que los utilizan. Necesitar probar un método privado puede ser síntoma de una mala organización de la clase y es muy probable que lo que se necesite sea una refactorización.
+
+Con Reflection también podemos probar propiedades privadas:
+
+```php
+public function testIDIsAnInteger()
+    {
+        $product = new Product;
+
+        $reflector = new ReflectionClass(Product::class);
+        $property = $reflector->getProperty('product_id');
+        $property->setAccessible(true);
+        $value = $property->getValue($product);
+
+        $this->assertIsInt($value);
+    }
 ```
 
 # Test Doubles: *Mocks*
@@ -963,9 +1112,123 @@ $paymentGateway
 // ...
 ```
 
-# Mockery
+## Probando clases abstractas
 
-Aunque la funcionalidad de PHPUnit para trabajar con *Mocks* es muy completa, podemos utilizar librerías externas más especializadas. La más común para trabajar con PHPUnit es Mockery, que ofrece una forma diferente de definir y configurar *Mocks*, además de dar funcionalidad que PHPUnit no ofrece.
+La primera forma de probar una clase abstracta es obvia: crear una clase hija y realizar los tests sobre esta clase hija. Pero PHPUnit nos da una forma de probar las clases abstractas. Se trata de crear un Mock con un método específico para este tipo de clases:
+
+```php
+public function testNameAndTitleIncludesValueFromGetTitle()
+{
+    $mock = $this->getMockBuilder(AbstractPerson::class)
+        ->setConstructorArgs(['Green'])
+        ->getMockForAbstractClass();
+
+    $mock->method('getTitle')
+        ->willReturn('Dr.');
+
+    $this->assertEquals('Dr. Green', $mock->getNameAndTitle());
+}
+```
+
+## Probando métodos estáticos (I)
+
+Las pruebas sobre métodos estáticos se pueden realizar sin problema:
+
+```php
+// ...
+public function testSendMessageReturnsTrue()
+{
+    $this->assertTrue(Mailer::send('dave@example.com', 'Hello!'));
+}
+// ...
+```
+
+El problema viene cuando estamos probando un método que hace uso de un método estático y queremos crear un Mock, ya que obtendremos un error dado que no podemos instanciar un método estático desde un Mock. Para resolver esto tenemos dos opciones:
+
+1. Refactorizar el método
+2. Cambiar la forma en la que se invoca al método estático
+3. Usar Mockery
+
+### Refactorizar el método
+
+Consiste, simplemente, en eliminar la propiedad estática y acometer la refactorización necesaria. Es el método preferido por los desarrolladores.
+
+### Cambiar la forma en la que se invoca al método estático
+
+Aunque la funcionalidad de PHPUnit para trabajar con *Mocks* es muy completa, podemos utilizar librerías externas más especializadas. La más común para trabajar con PHPUnit es Mockery, que ofrece una forma diferente de definir y configurar *Mocks*, además de dar funcionalidad que PHPUnit no ofrece. Supongamos que estamos probando este método que invoca a una función estática de un Mailer:
+
+```php
+// ...
+public function notify(string $message)
+{
+    return Mailer::send($this->email, $message);
+}
+// ...
+```
+
+Como hemos visto, queremos crear un *Mock* de esta clase, pero obtenemos un error ya que el método `send` es estático. Creamos el callable que representa al método estático (un array con el nombre de la clase y el método);
+
+```php
+// ...
+public function notify(string $message)
+{
+    $callable = [Mailer::class, 'send'];
+    return call_user_func($callable, $this->email, $message);
+}
+// ...
+```
+
+Si pasamos los tests ahora veremos que funciona, pero que seguimos invocando al código del método Mailer, del que necesitamos un Mock, por lo que usaremos el $callable para crear el Mock. Creamos una propiedad y un setter y modificamos la función para que utilice este callable:
+
+```php
+// ...
+protected $mailerCallable;
+// ...
+public function setMailerCallable(callable $mailerCallable)
+{
+    $this->mailerCallable = $mailerCallable;
+}
+// ...
+public function notify(string $message)
+{
+    return call_user_func($this->mailerCallable, $this->email, $message);
+}
+// ...
+```
+
+Y en nuestro test invocamos usando el callable:
+
+```php
+// ...
+public function testNotifyReturnsTrue()
+{
+    $user = new UserUseStaticMethod('user@domain.com');
+    $user->setMailerCallable([Mailer::class, 'send']);
+    $this->assertTrue($user->notify('Hello!'));
+}
+// ...
+```
+
+Comprobamos el test y vemos que pasa correctamente. Pero aún no hemos creado el Mock y, por lo tanto, estamos ejecutando el código de la clase Mailer. Para crear nuestro Mock, sustituimos el argumento callable de la función por una función anónima, que ejercerá de callback:
+
+```php
+// ...
+public function testNotifyReturnsTrue()
+{
+    $user = new UserUseStaticMethod('user@domain.com');
+    $user->setMailerCallable([Mailer::class, 'send']);
+    $this->assertTrue($user->notify('Hello!'));
+}
+// ...
+```
+
+Y ya estaríamos probando un método que invoca a un método estático. Como vemos, no dejamos de tener que modificar el código de la función `notify`, por lo que debemos mantener este tipo de pruebas como una opción conociendo toda su repercusión. En nuestro caso, cualquier método que invoque a `notify` deberá ser adaptado. Por suerte, como hemos desarrollado test para todos nuestros métodos, no tendremos problema en localizar dónde hay que modificar :)
+
+### Usar Mockery
+
+Mockery es una librería para trabajar con Mocks que nos ofrece una mejor legibilidad del código y funciones nuevas y mejoradas sobre los Mocks de PHPUnit. En el siguiente capítulo aprenderemos Mockery y en un apartado abordaremos el test de métodos estáticos usando Mockery.
+
+# Mockery
 
 ## Instalación
 
@@ -1098,6 +1361,69 @@ public function testCorrectAverageIsReturnedWithMockery()
 // ...
 ```
 
+## Probando métodos estáticos (II)
+
+Con Mockery podemos crear Mocks de métodos estáticos. Lo hace interceptando el autoload que carga la clase cuando un método estático es invocado.
+
+Para crear un Mock de una clase con métodos estáticos debemos usar los alias de Mockery al crear el Mock de la clase Mailer:
+
+```php
+// ...
+$mailerMock = Mockery::mock('alias:Mailer');
+// ...
+```
+
+Y nuestro test quedaría así:
+
+```php
+// ...
+public function testNotifyReturnsTrue()
+{
+    $user = new UserUseStaticMethod('user@domain.com');
+
+    $mailerMock = Mockery::mock('alias:Mailer');
+    $mailerMock->shouldReceive('send')
+        ->once()
+        ->with($user->email, 'Hello!')
+        ->andReturn(true);
+    $this->assertTrue($user->notify('Hello!'));
+}
+// ...
+```
+
+Si en otros tests estamos creando Mocks de la misma clase es posible que recibamos el error:
+
+```
+Mockery\Exception\RuntimeException: Could not load mock Mailer, class already exists
+```
+
+Esto es porque, al estar en la misma ejecución, básicamente estamos instanciando la clase dos veces. Para esto PHPUnit provee unas anotaciones con las que podemos indicar que el test se debe ejecutar en un proceso separado:
+
+```php
+// ...
+/**
+ * @runInSeparateProcess
+ * @preserveGlobalState disabled
+ */
+public function testNotifyReturnsTrue()
+{
+    $user = new UserUseStaticMethod('user@domain.com');
+
+    $mailerMock = Mockery::mock('alias:Mailer');
+    $mailerMock->shouldReceive('send')
+        ->once()
+        ->with($user->email, 'Hello!')
+        ->andReturn(true);
+    $this->assertTrue($user->notify('Hello!'));
+}
+// ...
+```
+
+Podemos ver la documentación de estas dos anotaciones:
+
+- https://phpunit.de/manual/6.5/en/appendixes.annotations.html#appendixes.annotations.runInSeparateProcess
+- https://phpunit.de/manual/6.5/en/appendixes.annotations.html#appendixes.annotations.preserveGlobalState
+
 ## Spies
 
 Una de las funcionalidades que ofrece Mockery que no tiene PHPUnit son los *spies*. En esencia son como los *Mocks* pero, mientras que en los *Mocks* tenemos que determinar lo que esperamos antes de la ejecución, en los *spies* podemos determinarlo después de la ejecución. Los spies almacenan el resultado de cualquier interacción entre el spy y el SUT (Sistem Under Test) y nos permite hacer aserciones sobre esos resultados.
@@ -1149,6 +1475,65 @@ public function testOrderIsProcessedUsingASpy()
 
 Como vemos, primero ejecutamos la acción y luego validamos lo que ha sucedido.
 
+# TDD: Test Driven development
+
+Hasta ahora hemos desarrollado tests de pruebas para nuestro código: este código existía antes de escribir los test. La metodología TDD, Test Driven Development, consiste en escribir primero los tests y luego escribir código que supere estos tests.
+
+## Configurar un entorno TDD
+
+Partiendo de una carpeta vacía, lo primero que hacemos es instalar PHPUnit:
+
+```
+$ composer require --dev phpunit/phpunit
+```
+
+Creamos las carpetas tests y src:
+
+```
+$ mkdir tests
+$ mkdir src
+```
+
+Añadimos la sección `autoload` a `composer.json`:
+
+`composer.json`
+
+```json
+{
+    "require-dev": {
+        "phpunit/phpunit": "^9.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "": "/src"
+        }
+    }
+}
+```
+
+Regeneramos los archivos autoload de Composer:
+
+```
+$ composer dump-autoload
+```
+
+Creamos un archivo de configuración para PHPUnit: phpunit.xml en la raíz del proyecto:
+
+`phpunit.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit colors="true"
+         verbose="true"
+         bootstrap="vendor/autoload.php">
+    <testsuites>
+        <testsuite name="Test suite">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
+</phpunit>
+```
+
 # Referencias
 
 ## PHPUnit
@@ -1162,3 +1547,7 @@ Como vemos, primero ejecutamos la acción y luego validamos lo que ha sucedido.
 - Integración con PHPUnit: http://docs.mockery.io/en/latest/reference/phpunit_integration.html
 - Repositorio: https://github.com/mockery/mockery
 - Creating Test Doubles: http://docs.mockery.io/en/latest/reference/creating_test_doubles.html
+
+## PHP
+
+- Callables/Callbacks: https://www.php.net/manual/en/language.types.callable.php

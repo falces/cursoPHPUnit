@@ -31,4 +31,25 @@ class Mailer
 
         return true;
     }
+
+    /**
+     * Send a message
+     *
+     * @param string $email  Recipient email address
+     * @param string $message  Content of the message
+     *
+     * @throws InvalidArgumentException If $email is empty
+     *
+     * @return boolean
+     */
+    public static function send(string $email, string $message): bool
+    {
+        if (empty($email)) {
+            throw new InvalidArgumentException;
+        }
+
+        echo "Send '$message' to $email";
+
+        return true;
+    }
 }
